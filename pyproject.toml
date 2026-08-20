@@ -22,7 +22,7 @@ classifiers = [
 import-gate = "import_gate.cli:main"
 
 [project.urls]
-Repository = "https://github.com/Aboodtt404/import-gate"
+Repository = "https://github.com/Mercatura-Forum/import-gate"
 
 [tool.setuptools.packages.find]
 where = ["src"]
