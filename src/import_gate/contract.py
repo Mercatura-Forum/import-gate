@@ -68,8 +68,8 @@ class ContractReport:
     #: modules the extractor could not read. `check()` cannot judge a module it
     #: could not parse, so it skips one — which means every errored module is a
     #: silently UNCHECKED module. Counting them here is what makes that
-    #: visible: "0 violations over 51 modules, 51 errored" is not the same
-    #: statement as "0 violations over 51 modules", and without this field the
+    #: visible: "0 violations over 50 modules, 50 errored" is not the same
+    #: statement as "0 violations over 50 modules", and without this field the
     #: two are indistinguishable.
     errored: int = 0
     violations: list[Violation] = field(default_factory=list)
@@ -152,6 +152,13 @@ def check(root: Path, data: dict | None = None,
                             "resolves to no module in this tree"),
                 ))
                 continue
+            if "?" in spec:
+                # a query-suffixed import (`./shader?raw`) is a bundler
+                # TRANSFORM: it must point at a real file (checked above), but
+                # what it imports is the transform's output, not the module's
+                # bindings — judging export shapes here misdiagnoses a string
+                # import as TS2613
+                continue
             tmod = modules.get(target) or {}
             if tmod.get("error"):
                 continue
@@ -215,7 +222,11 @@ def repair(root: Path, rep: ContractReport, data: dict | None = None,
 
     for v in rep.violations:
         tmod = modules.get(v.target) or {}
-        if v.kind == "no-default-export":
+        # a target that is not on disk cannot be repaired — deciding that
+        # HERE keeps the report honest: `repaired` is only ever claimed for
+        # a write that actually happens below
+        on_disk = v.target and (src / v.target).is_file()
+        if v.kind == "no-default-export" and on_disk:
             if v.binding in (tmod.get("namedExports") or []):
                 appended.setdefault(v.target, []).append(
                     f"export default {v.binding}")
@@ -227,7 +238,7 @@ def repair(root: Path, rep: ContractReport, data: dict | None = None,
                 rep.left.append(
                     f"{v.target}: no default export and no named export "
                     f"{v.binding!r} to alias — left for the author")
-        elif v.kind == "no-named-export":
+        elif v.kind == "no-named-export" and on_disk:
             if tmod.get("defaultExportName") == v.binding:
                 appended.setdefault(v.target, []).append(
                     f"export {{ {v.binding} }}")
@@ -240,6 +251,9 @@ def repair(root: Path, rep: ContractReport, data: dict | None = None,
                 rep.left.append(
                     f"{v.target}: exports no {v.binding!r} and its default "
                     "export is not that declaration — left for the author")
+        elif v.kind in ("no-default-export", "no-named-export"):
+            rep.left.append(
+                f"{v.target}: not a file on disk — nothing to repair")
         else:
             rep.left.append(
                 f"{v.importer}:{v.line}: '{v.target}' resolves to no module — "

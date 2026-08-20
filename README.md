@@ -12,8 +12,8 @@ comparison could have made before any of it started.
 
 `import-gate` makes that comparison. No model, no compiler, no network: a
 case-sensitive directory walk, a syntactic parse, and a lookup — producing
-the exact diagnostic `tsc` would have produced, plus a correction message a
-code generator can act on.
+the diagnostic `tsc` would have produced (message-exact; the column is
+reported as 1), plus a correction message a code generator can act on.
 
 ```
 $ import-gate path/to/app
@@ -24,6 +24,9 @@ build ran, so nothing has been verified yet — fix the imports and the same
 change will proceed.
 
   pages/About.tsx:3  '../components/ui/Card' — no such file in the tree (matching is case-sensitive)
+
+Import only modules that already exist in the tree, create the file you are
+importing in the same change, or declare the dependency in package.json first.
 ```
 
 ## What it checks
@@ -32,7 +35,8 @@ change will proceed.
 |---|---|---|
 | relative imports (`./x`, `../ui/Card`) | the tree itself — case-sensitive, TypeScript's own extension order, directory-index fallback | TS2307 |
 | bare packages (`react-hook-form`, `@scope/pkg/subpath`) | `package.json` dependencies / devDependencies / peerDependencies, by package **root** | TS2307 |
-| path aliases (`@/components/…`, `~/…`, `#…`) | `tsconfig.json` `compilerOptions.paths` (JSONC tolerated) | TS2307 |
+| path aliases (`@/components/…`, `~/…`) | `tsconfig.json` `compilerOptions.paths` (JSONC tolerated) | TS2307 |
+| subpath imports (`#…`) | `package.json` `imports` field | TS2307 |
 | export shape (default import of a named export, and vice versa) | the target module's parsed exports — **advisory only**, never rejected on | TS2613 / TS2305 |
 
 And what it deliberately lets through, because each would be a false
@@ -49,10 +53,16 @@ a package importing itself by its own `name`.
 **Every ambiguity resolves to "accept".** A false negative costs what you
 already pay today — one wasted build. A false positive rejects a legitimate
 change, and inside a generate-verify-retry loop it can spin a change that
-was fine. So when the tree cannot be read at all, the gate **fails open
-loudly**: `ok` is true and `method`/`errored` on the report say why, so a
-gate that stopped gating is visible in your telemetry instead of looking
-like a clean tree.
+was fine. So whenever absence cannot be PROVEN, the gate
+**fails open**: an unreadable tree (`method`/`errored` on the report say so,
+loudly), an unreadable or dependency-less `package.json` (the package half
+stops judging), an unparseable `tsconfig.json` or one that `extends` a base
+config while defining no local `paths` (the alias half stops judging), an
+unreadable `imports` field (the subpath half stops judging), and a change
+set that contains no TypeScript at all (nothing to judge — a stylesheet
+edit is never rejected for a pre-existing break elsewhere). A gate that
+stopped gating is visible in the report instead of looking like a clean
+tree.
 
 ## Install & use
 
@@ -124,7 +134,7 @@ keeps the contract instead of learning it from a compile error:
 ```
 ### Page ↔ router module contract (machine-read from this tree — COMPLETE)
 The `export` in a page and the `import` in router.tsx are ONE contract. …
-- 11 pages are DEFAULT imports (`import X from './pages/X'`) and must keep `export default`.
+- 9 pages are DEFAULT imports (`import X from './pages/X'`) and must keep `export default`.
 - EXCEPT these 2, which router.tsx imports BY NAME …
 ```
 
@@ -144,8 +154,8 @@ errors on **most** of a tree, which is a toolchain statement, not a code
 statement — a conservative regex extractor takes over and marks the report
 `method: "regex-fallback"`, so a weaker reading is never mistaken for the
 parser's. Modules the extractor could not read are counted in `errored`:
-"0 violations over 51 modules, 51 errored" is not the same statement as
-"0 violations over 51 modules", and the report never lets the two look alike.
+"0 violations over 50 modules, 50 errored" is not the same statement as
+"0 violations over 50 modules", and the report never lets the two look alike.
 
 ## What this is not
 

@@ -120,9 +120,10 @@ class GateReport:
 
         `retry_text` is prose for a model or a human; this is the same facts
         in the compiler's own `file(line,col)` shape, for any tooling that
-        parses diagnostics. Not a formatting nicety but a true statement:
-        this is the diagnostic tsc would have produced, minutes later, for
-        the same tree.
+        parses diagnostics. Message-exact, position-approximate: the text
+        is the diagnostic tsc would produce for the same tree, the path is
+        src/-relative and the column is reported as 1 (tsc points at the
+        specifier's own column).
         """
         return "\n".join(
             f"{r.importer}({r.line},1): error {r.ts_code}: "
@@ -187,7 +188,10 @@ def _types_package(root: str) -> str:
 
     `lodash` -> `@types/lodash`; `@scope/name` -> `@types/scope__name` (npm's
     own mangling). A type-only import satisfied by a devDependency `@types/x`
-    is legitimate even when `x` itself is absent.
+    is legitimate even when `x` itself is absent — and the acceptance applies
+    to VALUE imports too, deliberately: telling the two apart wrongly would
+    reject a legitimate change, and that is the direction this gate never
+    errs in.
     """
     if root.startswith("@"):
         return "@types/" + root[1:].replace("/", "__")
@@ -212,12 +216,20 @@ def _declared(root: Path) -> tuple[set[str], str]:
     return names, str(j.get("name") or "")
 
 
-def _alias_patterns(root: Path) -> list[str]:
-    """`compilerOptions.paths` keys, if the project defines any.
+def _alias_patterns(root: Path) -> list[str] | None:
+    """`compilerOptions.paths` keys, if the project defines any — or None
+    when alias absence CANNOT be proven, in which case the alias half must
+    not reject at all (the same fail-open rule the package half applies to
+    an unreadable package.json).
 
-    A specifier matched by one is ACCEPTED without resolving the mapped
-    target — verifying the target would mean a second resolver, and an
-    untested resolver must not be allowed to reject a legitimate change.
+    Unprovable cases: a tsconfig that does not parse even after JSONC
+    stripping, and a tsconfig that `extends` another file while defining no
+    local `paths` — the mapping may live in the base config, and following
+    the chain would mean re-implementing tsconfig resolution.
+
+    A specifier matched by a known pattern is ACCEPTED without resolving the
+    mapped target — verifying the target would mean a second resolver, and
+    an untested resolver must not be allowed to reject a legitimate change.
     """
     tc = root / "tsconfig.json"
     if not tc.is_file():
@@ -227,8 +239,24 @@ def _alias_patterns(root: Path) -> list[str]:
     try:
         j = json.loads(raw)
     except json.JSONDecodeError:
+        return None                 # a mapping may exist in there — fail open
+    paths = list(((j.get("compilerOptions") or {}).get("paths") or {}).keys())
+    if not paths and j.get("extends"):
+        return None                 # the mapping may live in the base config
+    return paths
+
+
+def _imports_patterns(root: Path) -> list[str] | None:
+    """package.json `imports` keys (Node subpath imports, all `#`-prefixed) —
+    or None when absence cannot be proven (unreadable package.json)."""
+    pj = root / "package.json"
+    if not pj.is_file():
         return []
-    return list(((j.get("compilerOptions") or {}).get("paths") or {}).keys())
+    try:
+        j = json.loads(pj.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return list((j.get("imports") or {}).keys())
 
 
 def _matches_alias(spec: str, patterns: list[str]) -> bool:
@@ -335,7 +363,15 @@ def gate(root: Path, changed: list[str] | None = None) -> GateReport:
         # let `method` say so — see the module docstring.
         return rep
 
-    only = _widen_for_deletions(_norm_changed(changed), modules)
+    normed = _norm_changed(changed)
+    if changed is not None and not normed:
+        # A change set that normalizes to NOTHING (a CSS-only edit, a README)
+        # has no imports to judge. Falling through would silently widen to a
+        # whole-tree check, letting a pre-existing break elsewhere reject an
+        # unrelated change — the exact false-positive direction this gate is
+        # built to avoid.
+        return rep
+    only = _widen_for_deletions(normed, modules)
 
     # ── the relative half — delegated to the contract check ─────────────────
     ct = contract.check(root, data=data, only=only)
@@ -352,6 +388,10 @@ def gate(root: Path, changed: list[str] | None = None) -> GateReport:
     # ── the package and alias halves ────────────────────────────────────────
     declared, own_name = _declared(root)
     alias_patterns = _alias_patterns(root)
+    imports_patterns = _imports_patterns(root)
+    # None means absence is unprovable — the corresponding half fails open.
+    can_judge_aliases = alias_patterns is not None
+    can_judge_imports = imports_patterns is not None
     # An unreadable or dependency-less package.json cannot prove absence.
     can_judge_packages = bool(declared)
 
@@ -370,12 +410,30 @@ def gate(root: Path, changed: list[str] | None = None) -> GateReport:
                 continue                      # the bundler resolves these
             if bare.lower().endswith(graph.ASSET_SUFFIXES):
                 continue                      # not a code module
-            if _matches_alias(bare, alias_patterns):
+            if can_judge_aliases and _matches_alias(bare, alias_patterns):
                 continue                      # a mapping exists; see _alias_patterns
             if bare.startswith("node:") or _pkg_root(bare) in _NODE_BUILTINS:
                 continue                      # bundler-resolved builtin
 
-            if bare.startswith(_ALIAS_PREFIXES) or bare.startswith("#"):
+            if bare.startswith("#"):
+                # Node subpath imports live in package.json's `imports` field,
+                # not in tsconfig paths — judged (and failed open) separately
+                if not can_judge_imports:
+                    continue
+                if _matches_alias(bare, imports_patterns):
+                    continue
+                rep.rejections.append(Rejection(
+                    importer=key, line=line, spec=spec, kind="unresolved-alias",
+                    ts_code="TS2307",
+                    detail=(f"'{spec}' is a subpath import, and this project's "
+                            "package.json `imports` field defines no mapping "
+                            "for it"),
+                ))
+                continue
+
+            if bare.startswith(_ALIAS_PREFIXES):
+                if not can_judge_aliases:
+                    continue                  # cannot prove absence — accept
                 rep.rejections.append(Rejection(
                     importer=key, line=line, spec=spec, kind="unresolved-alias",
                     ts_code="TS2307",

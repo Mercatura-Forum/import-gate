@@ -24,8 +24,10 @@ _EXTRACT_MJS = Path(__file__).with_name("extract.mjs")
 
 #: extensions tried when resolving a relative specifier, in TypeScript's order
 RESOLVE_EXTS = (".ts", ".tsx", ".d.ts")
-#: …then as a directory with an index file
-RESOLVE_INDEX = ("index.ts", "index.tsx")
+#: …then as a directory with an index file (index.d.ts included: TypeScript
+#: resolves a directory to its type-declaration index too, and omitting it
+#: makes the gate reject an import tsc accepts)
+RESOLVE_INDEX = ("index.ts", "index.tsx", "index.d.ts")
 #: non-code specifiers a frontend legitimately imports; not import questions
 ASSET_SUFFIXES = (".css", ".scss", ".svg", ".png", ".jpg", ".jpeg", ".webp",
                   ".gif", ".json", ".ico", ".woff", ".woff2")
@@ -62,7 +64,9 @@ _RE_EXPORT_DEFAULT_DECL = re.compile(
 _RE_EXPORT_DEFAULT_ANY = re.compile(r"^export\s+default\b", re.M)
 _RE_EXPORT_DEFAULT_IDENT = re.compile(r"^export\s+default\s+(?P<name>\w+)\s*$", re.M)
 _RE_EXPORT_NAMED_DECL = re.compile(
-    r"^export\s+(?:async\s+)?(?:function|class|const|let|var|interface|type|enum)\s+(?P<name>\w+)",
+    # `declare` rides along in .d.ts files: `export declare const x`
+    r"^export\s+(?:declare\s+)?(?:async\s+)?"
+    r"(?:function|class|const|let|var|interface|type|enum)\s+(?P<name>\w+)",
     re.M)
 _RE_EXPORT_BRACE = re.compile(r"^export\s*\{(?P<body>[^}]*)\}", re.M)
 _RE_EXPORT_STAR = re.compile(r"^export\s*\*\s*from\s*['\"](?P<spec>[^'\"]+)['\"]", re.M)
