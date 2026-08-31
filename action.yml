@@ -1,0 +1,50 @@
+name: import-gate
+description: >-
+  Deterministic import validation for generated TypeScript — catch TS2307
+  before the build runs, with findings as pull-request annotations.
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  root:
+    description: >-
+      Package root, relative to the workspace: the directory holding src/
+      (and package.json, tsconfig.json). Passed through as written so the
+      annotations address workspace-relative files.
+    required: true
+  changed:
+    description: >-
+      Optional space-separated list of changed files to restrict the check
+      to (default: the whole tree).
+    required: false
+    default: ""
+  python-version:
+    description: Python to run the gate with.
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: install import-gate
+      shell: bash
+      run: python -m pip install --quiet "${{ github.action_path }}"
+    - name: gate the imports
+      shell: bash
+      # inputs travel via env, never interpolated into the script: a branch
+      # name or file list must not be able to become shell syntax
+      env:
+        IG_ROOT: ${{ inputs.root }}
+        IG_CHANGED: ${{ inputs.changed }}
+      run: |
+        if [ -n "$IG_CHANGED" ]; then
+          # a space-separated list by declared contract, so unquoted on purpose
+          # shellcheck disable=SC2086
+          import-gate "$IG_ROOT" --format github --changed $IG_CHANGED
+        else
+          import-gate "$IG_ROOT" --format github
+        fi

@@ -24,3 +24,25 @@ jobs:
       - run: npm install --no-save typescript@5
       - run: pip install -e . pytest
       - run: pytest -q
+
+  # the action, proven on itself: a clean tree must pass, a broken tree must
+  # fail AND leave an error annotation — asserted, not assumed
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clean fixture passes
+        uses: ./
+        with:
+          root: .github/fixtures/clean
+      - name: broken fixture fails
+        id: broken
+        continue-on-error: true
+        uses: ./
+        with:
+          root: .github/fixtures/broken
+      - name: the failure actually happened
+        if: steps.broken.outcome != 'failure'
+        run: |
+          echo "the broken fixture did not fail the gate"
+          exit 1

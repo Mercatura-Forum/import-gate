@@ -94,6 +94,24 @@ if not report.ok:
 `root` is the package root — the directory holding `src/`, `package.json`
 and `tsconfig.json`.
 
+### As a GitHub Action
+
+The same gate as a CI step, with every finding annotated onto the offending
+line of the pull-request diff (`--format github` under the hood):
+
+```yaml
+- uses: Mercatura-Forum/import-gate@main
+  with:
+    root: frontend            # workspace-relative package root
+    # changed: src/pages/About.tsx src/router.tsx   # optional scoping
+```
+
+Rejections become `error` annotations (the TS code as the title), export-shape
+advisories become `warning`s, and the step fails exactly when the CLI would
+exit 1. Pass `root` relative to the workspace — the annotations reuse it as
+written, which is how the runner matches them to files in the diff. The action
+installs nothing from a registry: it runs the checked-out revision you pinned.
+
 ### Scoping to a change
 
 `gate(root, changed=[...])` restricts the check to the files a change
